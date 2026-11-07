@@ -1,4 +1,4 @@
-"""Streamlit screen for the inventory bot.  Run:  streamlit run app.py"""
+
 import contextlib
 import glob
 import io
@@ -9,35 +9,33 @@ st.set_page_config(page_title="Warehouse Assistant", page_icon="📦", layout="w
 
 # ---------------------------------------------------------------- load bot.py
 try:
-    import bot                       # your bot.py: loads Excel and builds the tables (runs once)
+    import bot                       
 except FileNotFoundError as e:
     st.error("Could not find the Excel file. Keep 'Inventory Data.xlsx' in the same folder as app.py.\n\n" + str(e))
     st.stop()
 
-# ---------------------------------------------------------------- email: confirm with a button
-# bot.py asks for "yes" in the terminal. Here we stage the draft, show it on screen,
-# and only send when the person presses the Send button.
+
 if not hasattr(bot, "_orig_send"):
     bot._orig_send = bot.tool_send_email
 
 def staged_send(to, subject, body, attach_file=None):
-    bot.ask_human = lambda prompt: "__not_yet__"            # reaching the question means all checks passed
+    bot.ask_human = lambda prompt: "__not_yet__"           
     with contextlib.redirect_stdout(io.StringIO()):
         res = bot._orig_send(to, subject, body, attach_file)
     if res.get("sent") is False and "declined" in str(res.get("note", "")):
         st.session_state.pending_email = {"to": to, "subject": subject, "body": body, "attach_file": attach_file}
         return {"sent": False, "note": "Draft prepared and shown to the user. It is NOT sent until the user presses Send in the app."}
-    return res                                              # an error from the safety checks
+    return res                                             
 
 bot.TOOL_FUNCS["send_email"] = staged_send
 
 def send_pending():
     p = st.session_state.pop("pending_email")
-    bot.ask_human = lambda prompt: "yes"                    # the person just pressed the button
+    bot.ask_human = lambda prompt: "yes"                  
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             res = bot._orig_send(p["to"], p["subject"], p["body"], p["attach_file"])
-    except Exception as e:                                  # wrong password, no internet ...
+    except Exception as e:                               
         res = {"error": str(e)}
     note = ("✅ Email sent to " + p["to"]) if res.get("sent") else "❌ Not sent: " + str(res.get("error") or res.get("note"))
     st.session_state.messages.append({"role": "assistant", "content": note, "files": []})
@@ -48,9 +46,8 @@ def cancel_pending():
     st.session_state.messages.append({"role": "assistant", "content": "Email cancelled. Nothing was sent.", "files": []})
     st.session_state.history.append({"role": "assistant", "content": "Email cancelled. Nothing was sent."})
 
-# ---------------------------------------------------------------- session state
-st.session_state.setdefault("messages", [])      # what is drawn on screen
-st.session_state.setdefault("history", [])       # text-only memory sent to the AI
+st.session_state.setdefault("messages", [])     
+st.session_state.setdefault("history", [])     
 ai_mode = bool(os.environ.get("ANTHROPIC_API_KEY"))
 t = bot.t
 
@@ -65,7 +62,7 @@ def answer_question(q):
     except Exception as e:
         return "AI error: " + str(e)
 
-# ---------------------------------------------------------------- sidebar
+
 with st.sidebar:
     st.header("📦 Warehouse Assistant")
     if ai_mode:
@@ -111,7 +108,7 @@ with st.sidebar:
         st.session_state.pop("pending_email", None)
         st.rerun()
 
-# ---------------------------------------------------------------- header numbers
+
 st.title("📦 Warehouse Assistant")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("SKUs", f"{len(t)}")
@@ -121,7 +118,7 @@ c4.metric("Stock value", f"{t['value'].sum() / 1e6:,.1f} M")
 
 tab_chat, tab_dash = st.tabs(["💬 Chat", "📊 Dashboard"])
 
-# ---------------------------------------------------------------- chat tab
+
 with tab_chat:
     if not st.session_state.messages:
         st.caption("Try: `price of 1193BA`, `what's low`, or use the buttons on the left. Anything outside the data gets: Not updated.")
@@ -153,7 +150,6 @@ with tab_chat:
         st.session_state.messages.append({"role": "assistant", "content": answer, "files": new_files})
         st.session_state.history += [{"role": "user", "content": prompt}, {"role": "assistant", "content": answer}]
 
-    # email draft card: nothing is sent until the person presses Send
     if "pending_email" in st.session_state:
         p = st.session_state.pending_email
         with st.container(border=True):
@@ -166,7 +162,7 @@ with tab_chat:
             b1.button("Send email", type="primary", on_click=send_pending)
             b2.button("Cancel", on_click=cancel_pending)
 
-# ---------------------------------------------------------------- dashboard tab
+
 with tab_dash:
     left, right = st.columns([1, 2])
     with left:
