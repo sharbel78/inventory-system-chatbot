@@ -9,21 +9,20 @@ from email.message import EmailMessage
 import numpy as np
 import pandas as pd
 import reportlab
-# ---------- SETTINGS ----------
-REPORT_DIR = "reports"                 # reports are saved here
-SUPPLIER_FILE = "Suppliers.xlsx"       # optional file: columns "SKU ID" and "Supplier"
-ALLOWED_RECIPIENTS = []                # emails the bot may send to, e.g. ["manager@company.com"]. Empty = email is off
+
+REPORT_DIR = "reports"                 
+SUPPLIER_FILE = "Suppliers.xlsx"      
+ALLOWED_RECIPIENTS = []                
 SMTP_HOST, SMTP_PORT = "smtp.gmail.com", 465
 
-FILE = "Inventory Data.xlsx"          # must match your file name exactly
+FILE = "Inventory Data.xlsx"        
 
-# ---------- STEP 1: load and clean ----------
 orders = pd.read_excel(FILE, "Past Orders")
 stock = pd.read_excel(FILE, "Stock")
 orders["SKU ID"] = orders["SKU ID"].astype(str).str.upper().str.strip()
 stock["SKU ID"] = stock["SKU ID"].astype(str).str.upper().str.strip()
 
-# ---------- STEP 2: daily demand (last 90 days) ----------
+
 end = orders["Order Date"].max()
 recent = orders[orders["Order Date"] > end - pd.Timedelta(days=90)]
 daily = (recent.groupby("SKU ID")["Order Quantity"].sum() / 90).rename("daily")
@@ -31,7 +30,6 @@ daily = (recent.groupby("SKU ID")["Order Quantity"].sum() / 90).rename("daily")
 t = stock.merge(daily, on="SKU ID", how="left")
 t["daily"] = t["daily"].fillna(0.0)
 
-# short names, so the code below can use t["stock"], r.lead_avg ...
 t = t.rename(columns={
     "Current Stock Quantity": "stock",
     "Average Lead Time (days)": "lead_avg",
@@ -39,7 +37,7 @@ t = t.rename(columns={
     "Unit Price": "price",
 })
 
-# ---------- STEP 3: cover, value, status, order quantity ----------
+
 t["value"] = t["stock"] * t["price"]
 t["reorder_point"] = t["daily"] * t["lead_max"]
 t["cover"] = np.where(t["daily"] > 0, t["stock"] / t["daily"].replace(0, np.nan), np.inf)
@@ -60,13 +58,12 @@ def status(r):
 t["status"] = t.apply(status, axis=1)
 t["order_qty"] = (t["daily"] * (t["lead_max"] + 30) - t["stock"]).clip(lower=0)
 
-# ---------- STEP 4: ABC class ----------
+
 v = t.sort_values("value", ascending=False)
 cum = v["value"].cumsum() / v["value"].sum()
 abc = dict(zip(v["SKU ID"], np.where(cum <= 0.8, "A", np.where(cum <= 0.95, "B", "C"))))
 t["abc"] = t["SKU ID"].map(abc)
 
-# optional supplier data
 HAS_SUPPLIERS = False
 if os.path.exists(SUPPLIER_FILE):
     sup = pd.read_excel(SUPPLIER_FILE)
@@ -76,7 +73,7 @@ if os.path.exists(SUPPLIER_FILE):
         t = t.merge(sup.rename(columns={"Supplier": "supplier"}), on="SKU ID", how="left")
         HAS_SUPPLIERS = True
 
-# ---------- STEP 5: save a count (inside a function!) ----------
+
 def save_count(sku, system_qty, counted_qty):
     var = counted_qty - system_qty
     con = sqlite3.connect("counts.db")
@@ -92,18 +89,17 @@ def save_count(sku, system_qty, counted_qty):
 
 
 
-# ---------- STEP 6: restock list ("what's low?") ----------
 def restock_list(limit=10):
     bad = t[t["status"].isin(["STOCKOUT", "CRITICAL", "WARNING"])].copy()
     order = {"STOCKOUT": 0, "CRITICAL": 1, "WARNING": 2}
     bad["rank"] = bad["status"].map(order)
-    bad["gap"] = bad["lead_avg"] - bad["cover"]          # days we will be short
+    bad["gap"] = bad["lead_avg"] - bad["cover"]         
     bad = bad.sort_values(["rank", "gap"], ascending=[True, False])
     return bad.head(limit)
 
 
-# ---------- STEP 7: find the SKU and helper functions ----------
-NOT_UPDATED = "Not updated"          # reply for anything outside the database
+
+NOT_UPDATED = "Not updated"          
 
 SKU_RE = re.compile(r"\b(\d{4})\s?([A-Za-z]{2})\b")
 
@@ -146,11 +142,11 @@ NOT_IN_DATABASE = ["supplier", "vendor", "location", "rack", "shelf", "bin", "ex
 def answer_sku(sku, low):
     row = t[t["SKU ID"] == sku]
     if row.empty:
-        return NOT_UPDATED                       # SKU is not in the database
+        return NOT_UPDATED                     
     if has(low, NOT_IN_DATABASE):
-        return NOT_UPDATED                       # we do not store that information
+        return NOT_UPDATED                     
     r = row.iloc[0]
-    o = orders[orders["SKU ID"] == sku]          # this SKU's order history
+    o = orders[orders["SKU ID"] == sku]         
     out = []
     for words, label, fn in FIELDS:
         if has(low, words):
@@ -161,7 +157,7 @@ def answer_sku(sku, low):
             f"lead time {r['lead_avg']}/{r['lead_max']} days | status {r['status']} | class {r['abc']}")
 
 
-# ---------- STEP 9: the brain: decide what to do with a message ----------
+
 def handle(msg):
     low = msg.lower().strip()
     sku = find_sku(msg)
@@ -169,7 +165,6 @@ def handle(msg):
     if low in {"hi", "hello", "help", "hey", ""}:
         return "Ask me about stock, price, lead time, demand, orders, reorder, overstock... Anything else: 'Not updated'."
 
-    # A) record a count: "counted 1193BA 500"
     if sku and has(low, ["counted", "found"]):
         rest = SKU_RE.sub(" ", msg)
         numbers = re.findall(r"\d+\.?\d*", rest)
@@ -183,11 +178,11 @@ def handle(msg):
         var = save_count(sku, system_qty, counted)
         return f"{sku}: system {system_qty:,.0f}, counted {counted:,.0f}, variance {var:+,.0f} Kg"
 
-    # B) questions about one SKU
+
     if sku:
         return answer_sku(sku, low)
 
-    # C) questions about the whole database
+ 
     n = get_n(low)
     if has(low, ["how many sku", "number of sku", "total sku", "how many items", "how many products"]):
         return f"{len(t)} SKUs in the database."
@@ -217,14 +212,14 @@ def handle(msg):
     if has(low, ["summary", "overview"]):
         return t["status"].value_counts().to_string()
 
-    return NOT_UPDATED               # nothing in the database matches
+    return NOT_UPDATED               
 
 
 
 
-MODEL = "claude-sonnet-5-5"          # if you get a "model not found" error, check the model name in the Anthropic docs
+MODEL = "claude-sonnet-5-5"         
 
-# ---------- STEP 11: tools = safe functions the AI may call ----------
+
 COLS = ["SKU ID", "stock", "price", "daily", "cover", "lead_avg", "lead_max",
         "reorder_point", "value", "status", "abc", "order_qty"]
 if HAS_SUPPLIERS:
@@ -256,7 +251,7 @@ def tool_query_skus(status=None, abc=None, sort_by="daily", descending=True, lim
         d = d[d["abc"] == abc.upper()]
     if sort_by not in COLS:
         return {"error": "sort_by must be one of " + ", ".join(COLS)}
-    matching = len(d)                           # how many SKUs match before we cut the list
+    matching = len(d)                         
     d = d.sort_values(sort_by, ascending=not descending).head(min(int(limit), 50))
     return {"count_matching": int(matching), "rows": rows(d)}
 
@@ -287,10 +282,8 @@ def tool_record_count(sku, counted_qty):
     var = save_count(sku, system_qty, float(counted_qty))
     return {"sku": sku, "system_qty": system_qty, "counted_qty": float(counted_qty), "variance": float(var)}
 
-# =====================================================================
-# STEP 15: NEW ABILITIES  (forecast, what-if, reports, email, suppliers)
-# Paste this block just BEFORE the line:  TOOL_FUNCS = {
-# =====================================================================
+
+
 
 def num(x, digits=1):
     """Number -> rounded float, or None for NaN/inf (JSON-safe)."""
@@ -298,7 +291,7 @@ def num(x, digits=1):
     return None if (np.isnan(x) or np.isinf(x)) else round(x, digits)
 
 
-# ---------- 1. FORECAST ----------
+
 def monthly_series(sku=None):
     """Kg ordered per month (all SKUs if sku is None). Drops a last month that is only partly finished."""
     o = orders if sku is None else orders[orders["SKU ID"] == sku]
@@ -307,7 +300,7 @@ def monthly_series(sku=None):
     m = o.groupby(o["Order Date"].dt.to_period("M"))["Order Quantity"].sum()
     last_day = orders["Order Date"].max()
     last_month = last_day.to_period("M")
-    if last_day.normalize() < last_month.end_time.normalize():      # data stops mid-month
+    if last_day.normalize() < last_month.end_time.normalize():     
         m = m[m.index < last_month]
     if m.empty:
         return None
@@ -320,9 +313,9 @@ def tool_forecast_demand(sku=None, months_ahead=1):
     m = monthly_series(sku)
     if m is None or len(m) < 3:
         return {"error": "not enough monthly history to forecast"}
-    ma3 = float(m.tail(3).mean())                      # average of the last 3 full months
+    ma3 = float(m.tail(3).mean())                     
     level = float(m.iloc[0])
-    for x in m.iloc[1:]:                               # exponential smoothing, alpha = 0.5
+    for x in m.iloc[1:]:                              
         level = 0.5 * float(x) + 0.5 * level
     prev3 = m.iloc[-6:-3]
     trend = None
@@ -347,7 +340,7 @@ def tool_forecast_demand(sku=None, months_ahead=1):
     return out
 
 
-# ---------- 2. WHAT-IF ----------
+
 def tool_what_if(lead_time_multiplier=1.0, demand_multiplier=1.0, stock_change_pct=0.0, sku=None, limit=10):
     s = t.copy()
     s["daily"] = s["daily"] * float(demand_multiplier)
@@ -355,7 +348,7 @@ def tool_what_if(lead_time_multiplier=1.0, demand_multiplier=1.0, stock_change_p
     s["lead_max"] = s["lead_max"] * float(lead_time_multiplier)
     s["stock"] = s["stock"] * (1 + float(stock_change_pct) / 100)
     s["cover"] = s["stock"] / s["daily"]
-    s["status"] = s.apply(status, axis=1)                 # re-use YOUR status() function
+    s["status"] = s.apply(status, axis=1)                
     s["order_qty"] = (s["daily"] * (s["lead_max"] + 30) - s["stock"]).clip(lower=0)
 
     before, after = t.set_index("SKU ID"), s.set_index("SKU ID")
@@ -385,7 +378,7 @@ def tool_what_if(lead_time_multiplier=1.0, demand_multiplier=1.0, stock_change_p
     }
 
 
-# ---------- 3. REPORT EXPORT (Excel / PDF) ----------
+
 def tool_export_report(report="reorder", file_format="excel"):
     cols = ["SKU ID", "status", "abc", "stock", "price", "daily", "cover", "lead_avg", "lead_max", "order_qty"]
     if HAS_SUPPLIERS:
@@ -436,7 +429,6 @@ def tool_export_report(report="reorder", file_format="excel"):
     return {"file": os.path.abspath(path), "rows": int(len(d)), "report": report}
 
 
-# ---------- 4. EMAIL (human must confirm every send) ----------
 def ask_human(prompt):
     """Asks the person at the keyboard. In a web app you would replace this with a button."""
     return input(prompt)
@@ -473,7 +465,7 @@ def tool_send_email(to, subject, body, attach_file=None):
     return {"sent": True, "to": to}
 
 
-# ---------- 5. SUPPLIERS ----------
+
 def tool_supplier_report(sort_by="avg_lead_time_days", limit=10):
     if not HAS_SUPPLIERS:
         return {"error": "No supplier data. Fill in Suppliers.xlsx (columns: SKU ID, Supplier)."}
@@ -503,7 +495,7 @@ TOOL_FUNCS = {
     "supplier_report": tool_supplier_report,
 }
 
-# description of each tool, so the AI knows when to use it
+
 TOOLS = [
     {"name": "get_sku",
      "description": "All facts about one SKU: stock, price, daily demand, days of cover, lead times, status, ABC class, suggested order quantity, order count and dates.",
@@ -558,12 +550,12 @@ Never say an email was sent unless the tool result says sent is true.
 Never guess or use outside knowledge. Keep answers short and clear. Quantities are in Kg."""
 
 
-# ---------- STEP 12: the AI loop ----------
+
 def ask_llm(question, history):
     import anthropic
-    client = anthropic.Anthropic()              # reads the ANTHROPIC_API_KEY environment variable
+    client = anthropic.Anthropic()              
     messages = history + [{"role": "user", "content": question}]
-    for _ in range(6):                          # at most 6 tool rounds, then stop
+    for _ in range(6):                         
         resp = client.messages.create(model=MODEL, max_tokens=1500, system=SYSTEM,
                                       tools=TOOLS, messages=messages)
         if resp.stop_reason != "tool_use":
@@ -582,12 +574,12 @@ def ask_llm(question, history):
     return NOT_UPDATED
 
 
-# ---------- STEP 13: one entry point (AI if a key exists, else keyword bot) ----------
-chat_history = []                               # last few question/answer pairs
+
+chat_history = []                              
 
 def ask(question):
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        return handle(question)                 # no key: use the keyword bot from Step 9
+        return handle(question)               
     try:
         answer = ask_llm(question, chat_history[-6:])
     except Exception as e:
@@ -597,7 +589,7 @@ def ask(question):
     return answer
 
 
-# ---------- STEP 14: chat in the terminal ----------
+
 if __name__ == "__main__":
     mode = "AI mode" if os.environ.get("ANTHROPIC_API_KEY") else "keyword mode (no ANTHROPIC_API_KEY set)"
     print("Inventory bot, " + mode + ". Type 'quit' to stop.")
@@ -607,13 +599,9 @@ if __name__ == "__main__":
             break
         print("Bot:", ask(msg))
 
-#new tool
 
 
-# =====================================================================
-# STEP 15: NEW ABILITIES  (forecast, what-if, reports, email, suppliers)
-# Paste this block just BEFORE the line:  TOOL_FUNCS = {
-# =====================================================================
+
 
 def num(x, digits=1):
     """Number -> rounded float, or None for NaN/inf (JSON-safe)."""
@@ -630,7 +618,7 @@ def monthly_series(sku=None):
     m = o.groupby(o["Order Date"].dt.to_period("M"))["Order Quantity"].sum()
     last_day = orders["Order Date"].max()
     last_month = last_day.to_period("M")
-    if last_day.normalize() < last_month.end_time.normalize():      # data stops mid-month
+    if last_day.normalize() < last_month.end_time.normalize():   
         m = m[m.index < last_month]
     if m.empty:
         return None
@@ -643,9 +631,9 @@ def tool_forecast_demand(sku=None, months_ahead=1):
     m = monthly_series(sku)
     if m is None or len(m) < 3:
         return {"error": "not enough monthly history to forecast"}
-    ma3 = float(m.tail(3).mean())                      # average of the last 3 full months
+    ma3 = float(m.tail(3).mean())                      
     level = float(m.iloc[0])
-    for x in m.iloc[1:]:                               # exponential smoothing, alpha = 0.5
+    for x in m.iloc[1:]:                               
         level = 0.5 * float(x) + 0.5 * level
     prev3 = m.iloc[-6:-3]
     trend = None
@@ -670,7 +658,7 @@ def tool_forecast_demand(sku=None, months_ahead=1):
     return out
 
 
-# ---------- 2. WHAT-IF ----------
+
 def tool_what_if(lead_time_multiplier=1.0, demand_multiplier=1.0, stock_change_pct=0.0, sku=None, limit=10):
     s = t.copy()
     s["daily"] = s["daily"] * float(demand_multiplier)
@@ -678,7 +666,7 @@ def tool_what_if(lead_time_multiplier=1.0, demand_multiplier=1.0, stock_change_p
     s["lead_max"] = s["lead_max"] * float(lead_time_multiplier)
     s["stock"] = s["stock"] * (1 + float(stock_change_pct) / 100)
     s["cover"] = s["stock"] / s["daily"]
-    s["status"] = s.apply(status, axis=1)                 # re-use YOUR status() function
+    s["status"] = s.apply(status, axis=1)                 
     s["order_qty"] = (s["daily"] * (s["lead_max"] + 30) - s["stock"]).clip(lower=0)
 
     before, after = t.set_index("SKU ID"), s.set_index("SKU ID")
@@ -708,7 +696,6 @@ def tool_what_if(lead_time_multiplier=1.0, demand_multiplier=1.0, stock_change_p
     }
 
 
-# ---------- 3. REPORT EXPORT (Excel / PDF) ----------
 def tool_export_report(report="reorder", file_format="excel"):
     cols = ["SKU ID", "status", "abc", "stock", "price", "daily", "cover", "lead_avg", "lead_max", "order_qty"]
     if HAS_SUPPLIERS:
@@ -759,7 +746,7 @@ def tool_export_report(report="reorder", file_format="excel"):
     return {"file": os.path.abspath(path), "rows": int(len(d)), "report": report}
 
 
-# ---------- 4. EMAIL (human must confirm every send) ----------
+
 def ask_human(prompt):
     """Asks the person at the keyboard. In a web app you would replace this with a button."""
     return input(prompt)
@@ -796,7 +783,7 @@ def tool_send_email(to, subject, body, attach_file=None):
     return {"sent": True, "to": to}
 
 
-# ---------- 5. SUPPLIERS ----------
+
 def tool_supplier_report(sort_by="avg_lead_time_days", limit=10):
     if not HAS_SUPPLIERS:
         return {"error": "No supplier data. Fill in Suppliers.xlsx (columns: SKU ID, Supplier)."}
